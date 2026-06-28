@@ -1,0 +1,24 @@
+{
+  "name": "puzzle-platform",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Game-agnostic multiplayer puzzle platform (first game: Chain Reaction)",
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/games/*",
+    "apps/web"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --build --noEmit",
+    "web:dev": "npm -w apps/web run dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

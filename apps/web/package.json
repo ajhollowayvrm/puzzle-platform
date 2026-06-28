@@ -1,0 +1,13 @@
+{
+  "name": "@puzzle/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo \"web app is scaffolded in Phase 1 (Vite + PWA)\" && exit 0"
+  },
+  "dependencies": {
+    "@puzzle/core": "*",
+    "@puzzle/game-chain-reaction": "*"
+  }
+}
