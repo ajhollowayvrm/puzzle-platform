@@ -1,0 +1,32 @@
+{
+  "id": "chain-reaction",
+  "version": 1,
+  "note": "Phase 1 starter bank. Each chain's adjacent words form a real compound word or common phrase (the `links`). Phase 4 replaces this with an offline generator + validator writing packs/chain-reaction/v1.json.",
+  "chains": [
+    { "words": ["SNOW", "BALL", "ROOM", "MATE"], "links": ["snowball", "ballroom", "roommate"] },
+    { "words": ["SUN", "FLOWER", "POT", "HOLE"], "links": ["sunflower", "flowerpot", "pothole"] },
+    { "words": ["FIRE", "FLY", "PAPER", "WEIGHT"], "links": ["firefly", "flypaper", "paperweight"] },
+    { "words": ["KEY", "BOARD", "WALK", "WAY"], "links": ["keyboard", "boardwalk", "walkway"] },
+    { "words": ["HONEY", "MOON", "LIGHT", "HOUSE"], "links": ["honeymoon", "moonlight", "lighthouse"] },
+    { "words": ["NEWS", "PAPER", "BACK", "BONE"], "links": ["newspaper", "paperback", "backbone"] },
+    { "words": ["BUTTER", "FLY", "WHEEL", "CHAIR"], "links": ["butterfly", "flywheel", "wheelchair"] },
+    { "words": ["BACK", "GROUND", "WORK", "SHOP"], "links": ["background", "groundwork", "workshop"] },
+    { "words": ["WATER", "FALL", "OUT", "SIDE"], "links": ["waterfall", "fallout", "outside"] },
+    { "words": ["FOOT", "BALL", "PARK", "WAY"], "links": ["football", "ballpark", "parkway"] },
+    { "words": ["HEAD", "LIGHT", "HOUSE", "WORK"], "links": ["headlight", "lighthouse", "housework"] },
+    { "words": ["DOWN", "TOWN", "HALL", "WAY"], "links": ["downtown", "town hall", "hallway"] },
+    { "words": ["HAND", "BAG", "PIPE", "LINE"], "links": ["handbag", "bagpipe", "pipeline"] },
+    { "words": ["BLACK", "BIRD", "BATH", "ROOM"], "links": ["blackbird", "birdbath", "bathroom"] },
+    { "words": ["COW", "BOY", "FRIEND", "SHIP"], "links": ["cowboy", "boyfriend", "friendship"] },
+    { "words": ["FIRE", "WORK", "SHOP", "LIFT"], "links": ["firework", "workshop", "shoplift"] },
+
+    { "words": ["RAIN", "BOW", "TIE", "BREAK", "DOWN"], "links": ["rainbow", "bowtie", "tiebreak", "breakdown"] },
+    { "words": ["FIRE", "FLY", "PAPER", "WEIGHT", "LIFTER"], "links": ["firefly", "flypaper", "paperweight", "weightlifter"] },
+    { "words": ["KEY", "BOARD", "WALK", "WAY", "SIDE"], "links": ["keyboard", "boardwalk", "walkway", "wayside"] },
+    { "words": ["NEWS", "PAPER", "BACK", "BONE", "YARD"], "links": ["newspaper", "paperback", "backbone", "boneyard"] },
+    { "words": ["HONEY", "MOON", "LIGHT", "HOUSE", "WORK"], "links": ["honeymoon", "moonlight", "lighthouse", "housework"] },
+    { "words": ["WATER", "FALL", "OUT", "SIDE", "WALK"], "links": ["waterfall", "fallout", "outside", "sidewalk"] },
+    { "words": ["HEAD", "LIGHT", "HOUSE", "WORK", "SHOP"], "links": ["headlight", "lighthouse", "housework", "workshop"] },
+    { "words": ["BLACK", "BIRD", "BATH", "ROOM", "MATE"], "links": ["blackbird", "birdbath", "bathroom", "roommate"] }
+  ]
+}

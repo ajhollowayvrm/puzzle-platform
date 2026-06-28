@@ -23,11 +23,20 @@ scripts/                       offline tooling (puzzle-pack generator, etc.)
 
 ```bash
 npm install
-npm run build       # tsc project-reference build of all packages
-npm test            # vitest (redaction + conformance tests, Phase 1+)
+npm run qa          # gate: tsc project-reference build + vitest (run before committing)
+npm run web:dev     # play Chain Reaction locally (Vite dev server)
 ```
 
 ## Build phases
 
-Tracked in `CLAUDE.md §12`. Currently: **Phase 0 — recon & scaffold (done)**.
-Next: Phase 1 — playable local prototype on an in-memory mock core.
+Tracked in `CLAUDE.md §12`.
+
+- **Phase 0 — recon & scaffold** ✅ (`STACK.md`)
+- **Phase 1 — playable local prototype on an in-memory mock core** ✅
+  - generic core (`@puzzle/core`): `Store` + `InMemoryStore`, `MatchService` move
+    pipeline (turn auth, optimistic-lock write+retry, redacted per-player delivery),
+    DIY scrypt auth (`@puzzle/core/auth`), conformance testkit (`@puzzle/core/testkit`)
+  - Chain Reaction module: full §7 rules, multi-round, starter puzzle pack
+  - `apps/web`: playable local UI (two-client + pass-and-play), renders redacted views only
+  - tests: redaction security gate, interface conformance, optimistic-lock retry — all green
+- **Phase 2 — real backend** (next): DynamoDB + Lambda + WebSocket API via SAM, same interfaces.

@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "echo \"web app is scaffolded in Phase 1 (Vite + PWA)\" && exit 0"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@puzzle/core": "*",
     "@puzzle/game-chain-reaction": "*"
+  },
+  "devDependencies": {
+    "vite": "^6.0.5"
   }
 }
