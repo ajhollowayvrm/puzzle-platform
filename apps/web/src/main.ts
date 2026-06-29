@@ -1,245 +1,331 @@
-// Phase 1 local prototype: runs the generic core in-memory IN THE BROWSER and
-// plays Chain Reaction. Renders ONLY redacted views from the service (never raw
-// state), so it doubles as a visual proof that hidden answers never reach a client.
+// Phase 1 local prototype shell. Runs the generic core in-memory IN THE BROWSER
+// (localStorage-backed so games survive reloads) and presents a game-agnostic
+// home → lobby → match flow. Game-specific rendering lives in per-game adapters
+// (see game-ui.ts); the shell only knows the registry + the redacted MatchView.
 import {
-  InMemoryStore,
+  getModule,
+  listModules,
   MatchService,
   register,
   type MatchView,
   type PlayerRef,
 } from '@puzzle/core';
-import {
-  chainReaction,
-  DEFAULT_CHAIN_CONFIG,
-  type ChainConfig,
-  type ChainMove,
-  type ChainView,
-} from '@puzzle/game-chain-reaction';
+import { chainReaction } from '@puzzle/game-chain-reaction';
+import { PersistentStore } from './persistent-store.js';
+import { chainReactionUI } from './chain-view.js';
+import type { ChainMove } from '@puzzle/game-chain-reaction';
+import type { GameUI } from './game-ui.js';
 
 register(chainReaction);
+
+// per-game UI adapters, keyed by gameId (a game with no entry shows as "coming soon")
+const GAME_UI: Record<string, GameUI> = {
+  'chain-reaction': chainReactionUI,
+};
 
 const PLAYERS: PlayerRef[] = [
   { playerId: 'p1', handle: 'Player 1' },
   { playerId: 'p2', handle: 'Player 2' },
 ];
+const LOCAL_ID = 'p1'; // all local matches include p1; used to list "my games"
 const handleOf = (id: string) => PLAYERS.find((p) => p.playerId === id)?.handle ?? id;
 
-const store = new InMemoryStore();
+const store = new PersistentStore();
 const svc = new MatchService(store, { clock: () => Date.now() });
 
-let matchId: string | null = null;
-let selectedRung: number | null = null;
+// ---- app state ----
+type Screen = 'home' | 'lobby' | 'match';
+let screen: Screen = 'home';
+let lobbyGameId: string | null = null;
+let activeMatchId: string | null = null;
 let mode: 'two' | 'pass' = 'two';
+let selectedRung: number | null = null;
+let lastStatus = '';
 let unsubscribe: (() => void) | null = null;
 
 const app = document.getElementById('app')!;
 
-// ---- shell ----
-
-const KNOBS: Array<{ key: keyof ChainConfig; label: string; min: number; max: number }> = [
-  { key: 'startingValue', label: 'Pot start', min: 2, max: 50 },
-  { key: 'peekPenalty', label: 'Peek cost', min: 1, max: 10 },
-  { key: 'valueFloor', label: 'Floor', min: 1, max: 10 },
-  { key: 'middleRungs', label: 'Rungs', min: 2, max: 3 },
-  { key: 'roundsPerMatch', label: 'Rounds', min: 1, max: 9 },
-];
-
-app.innerHTML = `
-  <h1>Chain Reaction <span class="sub">· local prototype</span></h1>
-  <p class="sub">Tune the knobs, start a match, and play it to feel the peek/solve economy. Views are redacted server-side — unsolved answers never reach the client.</p>
-  <div class="toolbar">
-    ${KNOBS.map(
-      (k) => `<div class="field"><label for="cfg-${k.key}">${k.label}</label>
-        <input id="cfg-${k.key}" type="number" min="${k.min}" max="${k.max}"
-          value="${DEFAULT_CHAIN_CONFIG[k.key]}" /></div>`,
-    ).join('')}
-    <div class="field"><label for="cfg-mode">View</label>
-      <select id="cfg-mode">
-        <option value="two">Two clients</option>
-        <option value="pass">Pass &amp; play</option>
-      </select></div>
-    <div class="field"><button id="newmatch">New match</button></div>
-    <div class="grow"></div>
-  </div>
-  <div id="status"></div>
-  <div class="panels" id="panels"></div>
-`;
-
-const statusEl = document.getElementById('status')!;
-const panelsEl = document.getElementById('panels')!;
-
-function readConfig(): Partial<ChainConfig> {
-  const cfg: Partial<ChainConfig> = {};
-  for (const k of KNOBS) {
-    const input = document.getElementById(`cfg-${k.key}`) as HTMLInputElement;
-    const v = Number(input.value);
-    if (Number.isFinite(v)) cfg[k.key] = v;
-  }
-  return cfg;
+// ---- helpers ----
+function esc(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 }
-
 function setStatus(msg: string, bad = false): void {
-  statusEl.textContent = msg;
-  statusEl.classList.toggle('bad', bad);
+  lastStatus = msg;
+  const el = document.getElementById('status');
+  if (el) {
+    el.textContent = msg;
+    el.classList.toggle('bad', bad);
+  }
 }
 
-// ---- match control ----
-
-async function newMatch(): Promise<void> {
-  mode = (document.getElementById('cfg-mode') as HTMLSelectElement).value as 'two' | 'pass';
+// ---- navigation ----
+function goHome(): void {
   unsubscribe?.();
-  const created = await svc.createMatch({
-    gameId: 'chain-reaction',
-    mode: 'versus',
-    players: PLAYERS,
-    config: readConfig(),
-  });
-  matchId = created.matchId;
+  unsubscribe = null;
+  activeMatchId = null;
+  screen = 'home';
+  void render();
+}
+function openLobby(gameId: string): void {
+  unsubscribe?.();
+  unsubscribe = null;
+  lobbyGameId = gameId;
+  screen = 'lobby';
+  void render();
+}
+function enterMatch(matchId: string): void {
+  unsubscribe?.();
+  activeMatchId = matchId;
   selectedRung = null;
+  screen = 'match';
   unsubscribe = svc.subscribe(matchId, (u) => {
-    setStatus(describeEvents(u.events));
+    const ui = GAME_UI[getMatchGameId(u.viewsByPlayer)];
+    setStatus(ui ? ui.describeEvents(u.events, handleOf) : '');
     void render();
   });
+  void render();
+}
+function getMatchGameId(views: Record<string, MatchView>): string {
+  return Object.values(views)[0]?.gameId ?? '';
+}
+
+async function startNewMatch(): Promise<void> {
+  if (!lobbyGameId) return;
+  const ui = GAME_UI[lobbyGameId];
+  const config: Record<string, number> = {};
+  if (ui) {
+    for (const k of ui.knobs) {
+      const input = document.getElementById(`cfg-${k.key}`) as HTMLInputElement | null;
+      const v = Number(input?.value);
+      if (Number.isFinite(v)) config[k.key] = v;
+    }
+  }
+  const modeSel = document.getElementById('cfg-mode') as HTMLSelectElement | null;
+  if (modeSel) mode = modeSel.value as 'two' | 'pass';
+
+  const created = await svc.createMatch({
+    gameId: lobbyGameId,
+    mode: 'versus',
+    players: PLAYERS,
+    config,
+  });
   setStatus('New match — Player 1 starts.');
-  await render();
+  enterMatch(created.matchId);
+}
+
+async function deleteMatch(matchId: string): Promise<void> {
+  await store.deleteMatch(matchId);
+  void render();
 }
 
 async function act(playerId: string, move: ChainMove): Promise<void> {
-  if (!matchId) return;
-  const out = await svc.applyMove({ matchId, playerId, move });
+  if (!activeMatchId) return;
+  const out = await svc.applyMove({ matchId: activeMatchId, playerId, move });
   if (!out.ok) {
     setStatus(out.error, true);
     return;
   }
   selectedRung = null;
-  // a successful move fires the subscription, which re-renders.
+  // success fires the subscription, which re-renders.
 }
 
 // ---- rendering ----
-
 async function render(): Promise<void> {
-  if (!matchId) return;
-  panelsEl.classList.toggle('pass', mode === 'pass');
-
-  if (mode === 'two') {
-    const views = await Promise.all(PLAYERS.map((p) => svc.getMatchView(matchId!, p.playerId)));
-    panelsEl.innerHTML = views.map((v, i) => panelHtml(v!, PLAYERS[i]!.playerId)).join('');
-  } else {
-    // pass & play: show only the player whose turn it is
-    const anyView = await svc.getMatchView(matchId, 'p1');
-    const cv = anyView!.view as ChainView;
-    const current = cv.matchOver ? 'p1' : cv.turn;
-    const v = await svc.getMatchView(matchId, current);
-    panelsEl.innerHTML = panelHtml(v!, current);
-  }
+  if (screen === 'home') app.innerHTML = await renderHome();
+  else if (screen === 'lobby') app.innerHTML = await renderLobby();
+  else app.innerHTML = await renderMatch();
 }
 
-function panelHtml(mv: MatchView, playerId: string): string {
-  const v = mv.view as ChainView;
-  const interactive = !v.matchOver && v.turn === playerId;
-  const pClass = playerId === 'p1' ? 'p1' : 'p2';
-  const me = handleOf(playerId);
+function brand(): string {
+  return `<header class="brand">
+    <h1>Puzzle Platform</h1>
+    <p class="sub">Two-player puzzle games. The board is server-authoritative and redacted per player — you only ever see what you're allowed to.</p>
+  </header>`;
+}
 
-  const tally = v.order
-    .map((id) => `${handleOf(id)} ${v.roundWins[id] ?? 0}`)
-    .join(' — ');
+async function renderHome(): Promise<string> {
+  const all = await svc.listMatches(LOCAL_ID);
+  const active = all.filter((m) => m.status === 'active');
 
-  const rows = v.rungs
-    .map((r, i) => {
-      const solvedClass = r.solvedBy ? `solved ${r.solvedBy === 'p1' ? 'p1' : 'p2'}` : '';
-      const sel = selectedRung === i && interactive ? 'selected' : '';
-      const slots = Array.from({ length: r.length }, (_, j) => {
-        const ch = j < r.shown.length ? r.shown[j] : '';
-        return `<span class="slot ${ch ? 'filled' : ''}">${ch ?? ''}</span>`;
-      }).join('');
-      const disabled = !interactive || r.solvedBy ? 'aria-disabled="true"' : '';
-      return `<div class="rung ${solvedClass} ${sel}" data-rung="${i}" ${disabled}
-        role="button" tabindex="${interactive && !r.solvedBy ? 0 : -1}">
-        <div class="slots">${slots}</div>
-        <div class="pot">pot <b>${r.value}</b></div>
-      </div>`;
+  const continueCard =
+    active.length > 0
+      ? (() => {
+          const m = active[0]!;
+          const ui = GAME_UI[m.gameId];
+          const name = getModule(m.gameId).meta.name;
+          const sub = ui ? ui.summary(m, handleOf) : '';
+          return `<button class="continue" data-action="resume" data-match="${m.matchId}">
+            <span class="continue-k">Continue</span>
+            <span class="continue-name">${esc(name)}</span>
+            <span class="continue-sub">${esc(sub)}</span>
+          </button>`;
+        })()
+      : '';
+
+  const cards = listModules()
+    .map((mod) => {
+      const meta = mod.meta;
+      const playable = !!GAME_UI[meta.id];
+      const inProgress = active.filter((m) => m.gameId === meta.id).length;
+      const badge = inProgress > 0 ? `<span class="pill">${inProgress} in progress</span>` : '';
+      const tag = `${meta.model === 'shared-turn' ? 'Turn-based' : 'Same-seed'} · ${meta.minPlayers}–${meta.maxPlayers}p`;
+      return `<button class="gamecard" data-action="open-game" data-game="${meta.id}" ${playable ? '' : 'disabled'}>
+        <span class="gc-name">${esc(meta.name)}</span>
+        <span class="gc-tag">${esc(tag)}</span>
+        ${playable ? badge : '<span class="pill muted">coming soon</span>'}
+      </button>`;
     })
     .join('');
 
-  const controls = v.matchOver
-    ? `<div class="over">${winnerText(mv)}</div>`
-    : `<div class="actions">
-        <button class="peek" data-player="${playerId}" ${interactive && selectedRung !== null ? '' : 'disabled'}>Peek</button>
-        <input type="text" id="guess-${playerId}" placeholder="guess selected rung" ${interactive ? '' : 'disabled'} autocomplete="off" />
-        <button class="solve secondary" data-player="${playerId}" ${interactive && selectedRung !== null ? '' : 'disabled'}>Solve</button>
-      </div>`;
+  return `${brand()}
+    ${continueCard}
+    <h2 class="section">Choose a game</h2>
+    <div class="grid">${cards}</div>`;
+}
 
-  return `<section class="panel ${interactive ? 'active' : ''}">
-    <div class="phead">
-      <span class="who"><span class="dot ${pClass}"></span>${me}</span>
-      <span>${interactive ? '<span class="turnbadge">your turn</span> ' : ''}<span class="score">round: ${v.scores[playerId] ?? 0}</span></span>
+async function renderLobby(): Promise<string> {
+  const gameId = lobbyGameId!;
+  const meta = getModule(gameId).meta;
+  const ui = GAME_UI[gameId];
+  const mine = (await svc.listMatches(LOCAL_ID)).filter((m) => m.gameId === gameId);
+
+  const knobs = ui
+    ? ui.knobs
+        .map(
+          (k) => `<div class="field"><label for="cfg-${k.key}">${esc(k.label)}</label>
+            <input id="cfg-${k.key}" type="number" min="${k.min}" max="${k.max}" value="${k.default}" /></div>`,
+        )
+        .join('')
+    : '';
+
+  const games = mine.length
+    ? mine
+        .map((m) => {
+          const sub = ui ? ui.summary(m, handleOf) : '';
+          const cls = m.status === 'complete' ? 'done' : 'live';
+          return `<div class="matchrow ${cls}">
+            <button class="mr-main" data-action="resume" data-match="${m.matchId}">
+              <span class="mr-sub">${esc(sub)}</span>
+            </button>
+            <button class="mr-del secondary" data-action="delete-match" data-match="${m.matchId}" aria-label="Delete game">✕</button>
+          </div>`;
+        })
+        .join('')
+    : `<p class="empty">No games yet — start one above.</p>`;
+
+  return `<div class="topbar">
+      <button class="secondary" data-action="home">← Games</button>
+      <strong>${esc(meta.name)}</strong>
+      <span></span>
     </div>
-    <div class="tally">Round ${v.round + 1} of ${v.roundsPerMatch} · match tally: ${tally}</div>
-    <div class="spine">
-      <div class="cap">${v.start}</div>
-      ${rows}
-      <div class="cap">${v.end}</div>
-    </div>
-    ${controls}
-  </section>`;
+    <section class="card">
+      <h2 class="section">New game</h2>
+      <div class="toolbar">
+        ${knobs}
+        <div class="field"><label for="cfg-mode">View</label>
+          <select id="cfg-mode">
+            <option value="two"${mode === 'two' ? ' selected' : ''}>Two clients</option>
+            <option value="pass"${mode === 'pass' ? ' selected' : ''}>Pass &amp; play</option>
+          </select></div>
+        <div class="field"><button data-action="new-game">Start</button></div>
+      </div>
+    </section>
+    <section class="card">
+      <h2 class="section">Your games</h2>
+      <div class="matchlist">${games}</div>
+    </section>`;
 }
 
-function winnerText(mv: MatchView): string {
-  const ids = mv.result.winnerIds;
-  if (ids.length === 0) return 'Match over.';
-  if (ids.length > 1) return `Match over — tie between ${ids.map(handleOf).join(' & ')}.`;
-  return `Match over — ${handleOf(ids[0]!)} wins! 🎉`;
-}
+async function renderMatch(): Promise<string> {
+  const matchId = activeMatchId!;
+  const ui = GAME_UI[getModule(activeMatchGameId(matchId)).meta.id];
 
-interface CrEvent {
-  type: string;
-  rung?: number;
-  by?: string;
-  value?: number;
-  winner?: string | null;
-  chain?: string[];
-}
-function describeEvents(events: unknown[]): string {
-  const parts: string[] = [];
-  for (const e of events as CrEvent[]) {
-    const who = e.by ? handleOf(e.by) : '';
-    const rung = (e.rung ?? 0) + 1;
-    if (e.type === 'peek') parts.push(`${who} peeked rung ${rung}`);
-    else if (e.type === 'solved') parts.push(`${who} solved rung ${rung} for ${e.value}!`);
-    else if (e.type === 'wrong') parts.push(`${who} missed rung ${rung}`);
-    else if (e.type === 'roundOver')
-      parts.push(
-        `Round done — ${e.winner ? `${handleOf(e.winner)} takes it` : 'tie'} (${(e.chain ?? []).join(' → ')})`,
-      );
-    else if (e.type === 'matchOver') parts.push('Match over!');
+  let panels = '';
+  if (mode === 'two') {
+    const views = await Promise.all(PLAYERS.map((p) => svc.getMatchView(matchId, p.playerId)));
+    panels = views
+      .map((v, i) => (v && ui ? ui.renderPanel(v, PLAYERS[i]!.playerId, { handleOf, selectedRung }) : ''))
+      .join('');
+  } else {
+    const anyView = await svc.getMatchView(matchId, 'p1');
+    if (anyView && ui) {
+      const v = anyView.view as { matchOver?: boolean; turn?: string };
+      const current = v.matchOver ? 'p1' : (v.turn ?? 'p1');
+      const cv = await svc.getMatchView(matchId, current);
+      if (cv) panels = ui.renderPanel(cv, current, { handleOf, selectedRung });
+    }
   }
-  return parts.join(' · ');
+
+  const name = getModule(activeMatchGameId(matchId)).meta.name;
+  return `<div class="topbar">
+      <button class="secondary" data-action="lobby">← ${esc(name)}</button>
+      <strong>${esc(name)}</strong>
+      <button class="secondary" data-action="toggle-mode">${mode === 'two' ? 'Two clients' : 'Pass & play'}</button>
+    </div>
+    <div id="status">${esc(lastStatus)}</div>
+    <div class="panels ${mode === 'pass' ? 'pass' : ''}">${panels}</div>`;
 }
 
-// ---- events ----
+// cache-free lookup of a loaded match's gameId (we always have it via the view)
+let activeGameIdCache: Record<string, string> = {};
+function activeMatchGameId(matchId: string): string {
+  return activeGameIdCache[matchId] ?? lobbyGameId ?? 'chain-reaction';
+}
 
-document.getElementById('newmatch')!.addEventListener('click', () => void newMatch());
-
-panelsEl.addEventListener('click', (ev) => {
+// ---- events (delegated once on the persistent #app root) ----
+app.addEventListener('click', (ev) => {
   const t = ev.target as HTMLElement;
+  const actionEl = t.closest('[data-action]') as HTMLElement | null;
+
+  // rung selection (only when enabled)
   const rungEl = t.closest('.rung') as HTMLElement | null;
-  if (rungEl && rungEl.getAttribute('aria-disabled') !== 'true') {
+  if (rungEl && rungEl.getAttribute('aria-disabled') !== 'true' && !actionEl?.dataset.action) {
     selectedRung = Number(rungEl.dataset.rung);
     void render();
     return;
   }
-  if (t.classList.contains('peek') && selectedRung !== null) {
-    void act(t.dataset.player!, { kind: 'peek', rung: selectedRung });
-  }
-  if (t.classList.contains('solve') && selectedRung !== null) {
-    const input = document.getElementById(`guess-${t.dataset.player}`) as HTMLInputElement | null;
-    const guess = input?.value ?? '';
-    void act(t.dataset.player!, { kind: 'solve', rung: selectedRung, guess });
+  if (!actionEl) return;
+  const action = actionEl.dataset.action;
+  const player = actionEl.dataset.player;
+
+  switch (action) {
+    case 'home':
+      goHome();
+      break;
+    case 'open-game':
+      openLobby(actionEl.dataset.game!);
+      break;
+    case 'lobby':
+      if (lobbyGameId) openLobby(lobbyGameId);
+      else goHome();
+      break;
+    case 'new-game':
+      void startNewMatch();
+      break;
+    case 'resume':
+      void resumeMatch(actionEl.dataset.match!);
+      break;
+    case 'delete-match':
+      void deleteMatch(actionEl.dataset.match!);
+      break;
+    case 'toggle-mode':
+      mode = mode === 'two' ? 'pass' : 'two';
+      selectedRung = null;
+      void render();
+      break;
+    case 'peek':
+      if (player && selectedRung !== null) void act(player, { kind: 'peek', rung: selectedRung });
+      break;
+    case 'solve':
+      if (player && selectedRung !== null) {
+        const input = document.getElementById(`guess-${player}`) as HTMLInputElement | null;
+        void act(player, { kind: 'solve', rung: selectedRung, guess: input?.value ?? '' });
+      }
+      break;
   }
 });
 
-// keyboard: Enter in a guess field solves the selected rung
-panelsEl.addEventListener('keydown', (ev) => {
+app.addEventListener('keydown', (ev) => {
   const t = ev.target as HTMLElement;
   if (ev.key === 'Enter' && t instanceof HTMLInputElement && t.id.startsWith('guess-') && selectedRung !== null) {
     const playerId = t.id.replace('guess-', '');
@@ -247,4 +333,17 @@ panelsEl.addEventListener('keydown', (ev) => {
   }
 });
 
-void newMatch();
+async function resumeMatch(matchId: string): Promise<void> {
+  // remember the gameId so the match screen can render before any view loads
+  const mv = await svc.getMatchView(matchId, LOCAL_ID);
+  if (!mv) {
+    setStatus('That game no longer exists.', true);
+    goHome();
+    return;
+  }
+  activeGameIdCache[matchId] = mv.gameId;
+  setStatus('Resumed.');
+  enterMatch(matchId);
+}
+
+void render();

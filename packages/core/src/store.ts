@@ -60,6 +60,7 @@ export interface Store {
   createMatch(m: MatchRecord): Promise<void>;
   getMatch(matchId: string): Promise<MatchRecord | null>;
   listMatchesForUser(userId: string): Promise<MatchRecord[]>;
+  deleteMatch(matchId: string): Promise<void>;
 
   // Optimistic-locked update. Writes patch (and bumps version) ONLY if the
   // current stored version === expectedVersion. Returns the new version on
@@ -131,6 +132,10 @@ export class InMemoryStore implements Store {
       if (m.playerIds.includes(userId)) out.push(structuredClone(m));
     }
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  async deleteMatch(matchId: string): Promise<void> {
+    this.matches.delete(matchId);
   }
 
   async updateMatch(
