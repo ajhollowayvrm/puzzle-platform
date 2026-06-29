@@ -5,11 +5,11 @@ import { DEFAULT_CHAIN_CONFIG, type ChainView } from '@puzzle/game-chain-reactio
 import type { GameUI, RenderCtx } from './game-ui.js';
 
 const KNOBS: GameUI['knobs'] = [
-  { key: 'startingValue', label: 'Pot start', min: 2, max: 50, default: DEFAULT_CHAIN_CONFIG.startingValue },
-  { key: 'peekPenalty', label: 'Peek cost', min: 1, max: 10, default: DEFAULT_CHAIN_CONFIG.peekPenalty },
-  { key: 'valueFloor', label: 'Floor', min: 1, max: 10, default: DEFAULT_CHAIN_CONFIG.valueFloor },
-  { key: 'middleRungs', label: 'Rungs', min: 2, max: 3, default: DEFAULT_CHAIN_CONFIG.middleRungs },
-  { key: 'roundsPerMatch', label: 'Rounds', min: 1, max: 9, default: DEFAULT_CHAIN_CONFIG.roundsPerMatch },
+  { key: 'startingValue', label: 'Pot start', min: 2, max: 99, default: DEFAULT_CHAIN_CONFIG.startingValue },
+  { key: 'peekPenalty', label: 'Peek cost', min: 1, max: 20, default: DEFAULT_CHAIN_CONFIG.peekPenalty },
+  { key: 'valueFloor', label: 'Min pot', min: 0, max: 20, default: DEFAULT_CHAIN_CONFIG.valueFloor },
+  { key: 'middleRungs', label: 'Rungs', min: 1, max: 99, default: DEFAULT_CHAIN_CONFIG.middleRungs },
+  { key: 'roundsPerMatch', label: 'Rounds', min: 1, max: 99, default: DEFAULT_CHAIN_CONFIG.roundsPerMatch },
 ];
 
 function winnerText(mv: MatchView, handleOf: (id: string) => string): string {

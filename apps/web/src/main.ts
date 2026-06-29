@@ -329,7 +329,9 @@ async function renderLobby(): Promise<string> {
           </select></div>`
       : '';
 
-  const startHint = session?.kind === 'cloud' ? '<p class="hint">You\'ll get a code to share with your opponent.</p>' : '';
+  const legend = `<p class="hint">Pot start = points a rung is worth · Peek cost = points lost per peek or wrong guess · Min pot = lowest a rung can fall to · Rungs = chain length · Rounds = best-of</p>`;
+  const startHint =
+    (session?.kind === 'cloud' ? "<p class=\"hint\">You'll get a code to share with your opponent.</p>" : '') + legend;
 
   const games = mine.length
     ? mine

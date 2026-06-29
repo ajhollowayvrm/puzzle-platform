@@ -10,7 +10,7 @@ import type {
   MoveContext,
   PlayerRef,
 } from '@puzzle/core';
-import packV1 from './pack.v1.json';
+import { LINKS } from './links.js';
 import {
   DEFAULT_CHAIN_CONFIG,
   type ChainConfig,
@@ -22,11 +22,65 @@ import {
 
 export * from './types.js';
 
-interface PackChain {
-  words: string[];
-  links: string[];
+// Directed adjacency built once from the verified compound links. A chain is a
+// path through this graph, so any adjacent pair is a real compound by construction.
+const ADJ: Map<string, string[]> = (() => {
+  const m = new Map<string, string[]>();
+  for (const [a, b] of LINKS) {
+    const list = m.get(a);
+    if (list) list.push(b);
+    else m.set(a, [b]);
+  }
+  return m;
+})();
+const START_WORDS = [...ADJ.keys()];
+
+// Deterministic Fisher–Yates using the seeded rng.
+function shuffled<T>(arr: readonly T[], rng: () => number): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a;
 }
-const CHAINS = packV1.chains as PackChain[];
+
+// Walk a path of `targetWords` distinct words (randomised DFS with backtracking).
+// Returns a full-length path if found, else the longest path reachable from `start`.
+function walkFrom(start: string, targetWords: number, rng: () => number, budget: { n: number }): string[] {
+  const visited = new Set<string>([start]);
+  let best = [start];
+  const dfs = (node: string, path: string[]): string[] | null => {
+    if (path.length >= targetWords) return path;
+    if (path.length > best.length) best = path;
+    if (budget.n-- <= 0) return null; // bound work so the Lambda never stalls
+    for (const next of shuffled(ADJ.get(node) ?? [], rng)) {
+      if (visited.has(next)) continue;
+      visited.add(next);
+      const found = dfs(next, [...path, next]);
+      if (found) return found;
+      visited.delete(next);
+    }
+    return null;
+  };
+  return dfs(start, [start]) ?? best;
+}
+
+// Build a chain with `rungs` hidden middle words (so rungs + 2 words total).
+// Tries several start words; returns the longest chain it can reach if the graph
+// can't supply the full requested length.
+function generateChain(rng: () => number, rungs: number): string[] {
+  const target = Math.max(3, rungs + 2);
+  const budget = { n: 20000 };
+  let best: string[] = [];
+  for (const start of shuffled(START_WORDS, rng)) {
+    const path = walkFrom(start, target, rng, budget);
+    if (path.length >= target) return path.slice(0, target);
+    if (path.length > best.length) best = path;
+    if (budget.n <= 0) break;
+  }
+  return best.length >= 3 ? best : ['SNOW', 'BALL', 'ROOM', 'MATE']; // defensive fallback
+}
 
 export const meta: GameMeta = {
   id: 'chain-reaction',
@@ -56,16 +110,6 @@ function mergeConfig(config: unknown): ChainConfig {
   return merged;
 }
 
-// Deterministically pick a chain whose interior length matches middleRungs,
-// falling back to the whole bank if none match.
-function pickChain(rng: () => number, middleRungs: number): PackChain {
-  const want = CHAINS.filter((c) => c.words.length - 2 === middleRungs);
-  const pool = want.length > 0 ? want : CHAINS;
-  const chain = pool[Math.floor(rng() * pool.length)];
-  if (!chain) throw new Error('chain-reaction: puzzle pack is empty');
-  return chain;
-}
-
 // Build the board for a given round (start/end/rungs/scores/turn).
 function buildRound(
   config: ChainConfig,
@@ -74,8 +118,7 @@ function buildRound(
   round: number,
 ): Pick<ChainState, 'start' | 'end' | 'rungs' | 'scores' | 'turn'> {
   const rng = makeRng(`${seed}#round${round}`);
-  const chain = pickChain(rng, config.middleRungs);
-  const words = chain.words.map((w) => w.toUpperCase());
+  const words = generateChain(rng, config.middleRungs).map((w) => w.toUpperCase());
   const start = words[0]!;
   const end = words[words.length - 1]!;
   const interior = words.slice(1, -1);
