@@ -39,4 +39,12 @@ Tracked in `CLAUDE.md §12`.
   - Chain Reaction module: full §7 rules, multi-round, starter puzzle pack
   - `apps/web`: playable local UI (two-client + pass-and-play), renders redacted views only
   - tests: redaction security gate, interface conformance, optimistic-lock retry — all green
-- **Phase 2 — real backend** (next): DynamoDB + Lambda + WebSocket API via SAM, same interfaces.
+- **Phase 2 — real backend** ✅: DynamoDB + Lambda (Function URL) via SAM, running the
+  same `MatchService`/`AccountService` behind a new `DynamoStore`. Real accounts (DIY
+  scrypt), create-a-match → share an invite code → opponent joins from another device,
+  server-side redaction, client polls for the opponent's moves. `infra/template.yaml`.
+  - Backend: `packages/server` (DynamoStore + Lambda router); deploy with
+    `sam deploy --template-file infra/template.yaml --stack-name puzzle-platform --resolve-s3 --capabilities CAPABILITY_IAM`.
+  - Web: sign in (or "play on this device"); cloud play talks to the Function URL.
+- **Phase 3 — async + WebSocket push + PWA install** (next): replace polling with an
+  API Gateway WebSocket push channel; add the installable PWA manifest/service worker.

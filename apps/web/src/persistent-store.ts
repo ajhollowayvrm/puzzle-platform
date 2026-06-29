@@ -6,6 +6,7 @@
 // Matches are persisted; users/tokens stay in-memory (no auth UI in the local
 // prototype yet — Phase 2 owns accounts).
 import {
+  applyPatch,
   HandleTakenError,
   type MatchPatch,
   type MatchRecord,
@@ -84,6 +85,12 @@ export class PersistentStore implements Store {
     const m = this.matches.get(matchId);
     return m ? structuredClone(m) : null;
   }
+  async getMatchByCode(inviteCode: string): Promise<MatchRecord | null> {
+    for (const m of this.matches.values()) {
+      if (m.inviteCode === inviteCode) return structuredClone(m);
+    }
+    return null;
+  }
   async listMatchesForUser(userId: string): Promise<MatchRecord[]> {
     const out: MatchRecord[] = [];
     for (const m of this.matches.values()) {
@@ -106,14 +113,7 @@ export class PersistentStore implements Store {
     if (!cur) return null;
     if (cur.version !== expectedVersion) return null;
     const nextVersion = cur.version + 1;
-    this.matches.set(matchId, {
-      ...cur,
-      state: structuredClone(patch.state),
-      status: patch.status,
-      turn: patch.turn,
-      updatedAt: patch.updatedAt,
-      version: nextVersion,
-    });
+    this.matches.set(matchId, { ...cur, ...applyPatch(patch), version: nextVersion });
     this.saveMatches();
     return nextVersion;
   }

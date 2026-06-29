@@ -4,5 +4,5 @@ export * from './types.js';
 export * from './store.js';
 export * from './service.js';
 export { makeRng } from './rng.js';
-export { newId, newSeed, newToken } from './ids.js';
+export { newId, newSeed, newToken, newCode } from './ids.js';
 export { register, getModule, listModules } from './registry.js';

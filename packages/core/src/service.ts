@@ -5,7 +5,7 @@
 
 import { getModule } from './registry.js';
 import { makeRng } from './rng.js';
-import { newId, newSeed } from './ids.js';
+import { newId, newSeed, newCode } from './ids.js';
 import type { Store, MatchRecord, MatchStatus } from './store.js';
 import type {
   GameMode,
@@ -17,9 +17,11 @@ import type {
 export interface CreateMatchInput {
   gameId: string;
   mode: GameMode;
-  players: PlayerRef[];
+  players: PlayerRef[]; // 1 player → waiting for a join; full roster → starts now
   config?: unknown;
   seed?: string;
+  // undefined → auto-generate a code when the match isn't full; null → no code (local).
+  inviteCode?: string | null;
 }
 
 export interface MatchView {
@@ -29,9 +31,10 @@ export interface MatchView {
   status: MatchStatus;
   turn: string | null;
   version: number;
-  view: unknown; // redacted for the requesting player
+  view: unknown; // redacted for the requesting player; null while waiting
   result: MatchResult;
   players: PlayerRef[];
+  inviteCode: string | null; // share this so a second player can join
 }
 
 export type MoveOutcome =
@@ -42,6 +45,7 @@ export type MoveErrorCode =
   | 'not_found'
   | 'not_a_player'
   | 'not_your_turn'
+  | 'not_active'
   | 'match_complete'
   | 'illegal_move'
   | 'conflict';
@@ -91,35 +95,110 @@ export class MatchService {
     if (!meta.modes.includes(input.mode)) {
       throw new Error(`game ${meta.id} does not support mode ${input.mode}`);
     }
-    if (input.players.length < meta.minPlayers || input.players.length > meta.maxPlayers) {
+    if (input.players.length < 1 || input.players.length > meta.maxPlayers) {
       throw new Error(
-        `game ${meta.id} needs ${meta.minPlayers}-${meta.maxPlayers} players, got ${input.players.length}`,
+        `game ${meta.id} accepts 1-${meta.maxPlayers} players at creation, got ${input.players.length}`,
       );
     }
 
     const now = this.clock();
     const seed = input.seed ?? newSeed();
-    const state = module.createState(input.config, seed, input.players);
-    const turn = module.currentTurn ? module.currentTurn(state) : null;
-    const status: MatchStatus = module.isOver(state) ? 'complete' : 'active';
+    const players = input.players;
+    const playerHandles: Record<string, string> = {};
+    for (const p of players) playerHandles[p.playerId] = p.handle;
+
+    // generate a join code unless the match is already full, or the caller opted out
+    const inviteCode =
+      input.inviteCode !== undefined
+        ? input.inviteCode
+        : players.length < meta.maxPlayers
+          ? newCode()
+          : null;
+
+    // Build state only once enough players are present; otherwise wait for a join.
+    const started = this.startState(module, input.config, seed, players);
 
     const record: MatchRecord = {
       matchId: newId('m_'),
       gameId: meta.id,
       mode: input.mode,
       model: meta.model,
-      playerIds: input.players.map((p) => p.playerId),
+      playerIds: players.map((p) => p.playerId),
+      playerHandles,
+      inviteCode,
       seed,
       config: input.config ?? null,
-      state,
+      state: started.state,
       version: 0,
-      status,
-      turn,
+      status: started.status,
+      turn: started.turn,
       createdAt: now,
       updatedAt: now,
     };
     await this.store.createMatch(record);
-    return this.viewOf(record, input.players, input.players[0]!.playerId);
+    return this.viewOf(record, players, players[0]!.playerId);
+  }
+
+  // A second player joins a waiting match via its invite code. When the roster
+  // reaches minPlayers, the board is built and the match goes active.
+  async joinMatch(args: { code: string; player: PlayerRef }): Promise<MatchView> {
+    for (let attempt = 0; attempt <= this.maxWriteRetries; attempt++) {
+      const match = await this.store.getMatchByCode(args.code);
+      if (!match) throw new Error('no game found for that code');
+      const module = getModule(match.gameId);
+
+      // idempotent: re-joining your own match just returns your view
+      if (match.playerIds.includes(args.player.playerId)) {
+        return this.viewOf(match, this.playerRefsOf(match), args.player.playerId);
+      }
+      if (match.status !== 'waiting' || match.playerIds.length >= module.meta.maxPlayers) {
+        throw new Error('that game is no longer open to join');
+      }
+
+      const playerIds = [...match.playerIds, args.player.playerId];
+      const playerHandles = { ...match.playerHandles, [args.player.playerId]: args.player.handle };
+      const players: PlayerRef[] = playerIds.map((id) => ({ playerId: id, handle: playerHandles[id] ?? id }));
+      const started = this.startState(module, match.config, match.seed, players);
+
+      const newVersion = await this.store.updateMatch(match.matchId, match.version, {
+        playerIds,
+        playerHandles,
+        state: started.state,
+        status: started.status,
+        turn: started.turn,
+        updatedAt: this.clock(),
+      });
+      if (newVersion === null) continue; // lost a race — reload and retry
+
+      const written: MatchRecord = {
+        ...match,
+        playerIds,
+        playerHandles,
+        state: started.state,
+        status: started.status,
+        turn: started.turn,
+        version: newVersion,
+      };
+      this.deliver(written, players, []);
+      return this.viewOf(written, players, args.player.playerId);
+    }
+    throw new Error('could not join right now, please retry');
+  }
+
+  // Build initial state once minPlayers are present, else stay waiting.
+  private startState(
+    module: ReturnType<typeof getModule>,
+    config: unknown,
+    seed: string,
+    players: PlayerRef[],
+  ): { state: unknown; status: MatchStatus; turn: string | null } {
+    if (players.length < module.meta.minPlayers) {
+      return { state: null, status: 'waiting', turn: null };
+    }
+    const state = module.createState(config, seed, players);
+    const turn = module.currentTurn ? module.currentTurn(state) : null;
+    const status: MatchStatus = module.isOver(state) ? 'complete' : 'active';
+    return { state, status, turn };
   }
 
   async getMatchView(matchId: string, forPlayerId: string): Promise<MatchView | null> {
@@ -154,6 +233,9 @@ export class MatchService {
       }
       if (match.status === 'complete') {
         return { ok: false, code: 'match_complete', error: 'match is already complete' };
+      }
+      if (match.status !== 'active' || match.state == null) {
+        return { ok: false, code: 'not_active', error: 'match has not started yet' };
       }
       if (match.model === 'shared-turn' && module.currentTurn) {
         const whose = module.currentTurn(match.state);
@@ -255,6 +337,7 @@ export class MatchService {
 
   private viewOf(m: MatchRecord, players: PlayerRef[], forPlayerId: string): MatchView {
     const module = getModule(m.gameId);
+    const live = m.status !== 'waiting' && m.state != null;
     return {
       matchId: m.matchId,
       gameId: m.gameId,
@@ -262,15 +345,17 @@ export class MatchService {
       status: m.status,
       turn: m.turn,
       version: m.version,
-      view: module.redact(m.state, forPlayerId),
-      result: module.result(m.state),
+      view: live ? module.redact(m.state, forPlayerId) : null,
+      result: live ? module.result(m.state) : { perPlayer: {}, winnerIds: [], complete: false },
       players,
+      inviteCode: m.inviteCode,
     };
   }
 
-  // Phase 1 stores no handles on the match record; reconstruct minimal PlayerRefs.
-  // Phase 2 will join against the Users table for real handles.
   private playerRefsOf(m: MatchRecord): PlayerRef[] {
-    return m.playerIds.map((playerId) => ({ playerId, handle: playerId }));
+    return m.playerIds.map((playerId) => ({
+      playerId,
+      handle: m.playerHandles?.[playerId] ?? playerId,
+    }));
   }
 }

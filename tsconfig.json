@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/games/chain-reaction" },
+    { "path": "packages/server" },
     { "path": "apps/web" }
   ]
 }

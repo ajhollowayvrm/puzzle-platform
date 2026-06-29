@@ -17,3 +17,13 @@ export function newToken(): string {
   for (const b of bytes) s += b.toString(16).padStart(2, '0');
   return s;
 }
+
+// Short human-shareable invite code (no ambiguous chars like O/0, I/1).
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export function newCode(len = 6): string {
+  const bytes = new Uint8Array(len);
+  globalThis.crypto.getRandomValues(bytes);
+  let s = '';
+  for (const b of bytes) s += CODE_ALPHABET[b % CODE_ALPHABET.length];
+  return s;
+}

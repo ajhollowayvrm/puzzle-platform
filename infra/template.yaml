@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Puzzle Platform backend (Phase 2). A single DynamoDB table (on-demand) and one
+  Lambda behind a Function URL running the game-agnostic MatchService + DIY-token
+  AccountService. A Function URL (not API Gateway) keeps this in the ALWAYS-free
+  tier — API Gateway's free tier expires after 12 months. WebSocket live-push will
+  be layered on later; until then the client polls. No VPC, no NAT.
+
+Parameters:
+  WebOrigin:
+    Type: String
+    Default: https://ajhollowayvrm.github.io
+    Description: Allowed CORS origin for the static PWA.
+
+Resources:
+  Table:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: puzzle-platform
+      BillingMode: PAY_PER_REQUEST # on-demand: no idle cost, pennies at our volume
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl # auto-expires bearer tokens
+        Enabled: true
+
+  ApiFn:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: puzzle-platform-api
+      Runtime: nodejs20.x
+      Architectures: [arm64] # ~20% cheaper than x86
+      Handler: index.handler
+      CodeUri: ../packages/server/dist-lambda
+      MemorySize: 256
+      Timeout: 10
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+      FunctionUrlConfig:
+        AuthType: NONE # the bearer token in the Authorization header is the auth
+        Cors:
+          AllowOrigins:
+            - !Ref WebOrigin
+            - http://localhost:5173
+          AllowMethods: [GET, POST]
+          AllowHeaders: [content-type, authorization]
+          MaxAge: 600
+
+Outputs:
+  ApiUrl:
+    Description: Function URL — set as VITE_API_URL for the web app.
+    Value: !GetAtt ApiFnUrl.FunctionUrl
+  TableName:
+    Value: !Ref Table

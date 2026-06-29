@@ -8,6 +8,8 @@ function sampleMatch(): MatchRecord {
     mode: 'versus',
     model: 'shared-turn',
     playerIds: ['p1', 'p2'],
+    playerHandles: { p1: 'P1', p2: 'P2' },
+    inviteCode: null,
     seed: 's',
     config: null,
     state: { n: 0 },
